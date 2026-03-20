@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WhatsMyLine — Line Learner</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #1a1a2e;
+      --bg2: #16213e;
+      --bg3: #0f3460;
+      --text: #eaeaea;
+      --text-dim: #8888aa;
+      --teal: #00b4d8;
+      --amber: #ffb703;
+      --danger: #e63946;
+      --success: #2ecc71;
+      --radius: 10px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1rem;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      letter-spacing: 0.05em;
+      color: var(--teal);
+      margin-bottom: 0.25rem;
+    }
+    .tagline { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 1.5rem; }
+
+    /* ── SCREENS ── */
+    #setup-screen, #rehearsal-screen {
+      width: 100%;
+      max-width: 720px;
+    }
+    #rehearsal-screen { display: none; }
+
+    /* ── SETUP ── */
+    .card {
+      background: var(--bg2);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1rem;
+      border: 1px solid #2a2a4a;
+    }
+    .card h2 { font-size: 1rem; color: var(--teal); margin-bottom: 0.75rem; }
+
+    #drop-zone {
+      border: 2px dashed #2a2a6a;
+      border-radius: var(--radius);
+      padding: 2.5rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      color: var(--text-dim);
+      position: relative;
+    }
+    #drop-zone.drag-over { border-color: var(--teal); background: rgba(0,180,216,0.07); }
+    #drop-zone.has-file { border-color: var(--success); border-style: solid; }
+    #drop-zone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer;
+    }
+    #drop-zone .drop-icon { font-size: 2.5rem; display: block; margin-bottom: 0.5rem; }
+    #drop-zone .drop-label { font-size: 0.95rem; }
+    #drop-zone .drop-hint { font-size: 0.78rem; margin-top: 0.3rem; color: var(--text-dim); }
+    #file-name { margin-top: 0.5rem; font-size: 0.85rem; color: var(--success); min-height: 1.2em; }
+
+    .form-row { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+    .form-group { flex: 1; min-width: 180px; }
+    .form-group label { display: block; font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.3rem; }
+
+    select, input[type="range"] {
+      width: 100%;
+      background: var(--bg3);
+      color: var(--text);
+      border: 1px solid #2a2a6a;
+      border-radius: 6px;
+      padding: 0.5rem 0.6rem;
+      font-size: 0.9rem;
+      outline: none;
+      cursor: pointer;
+    }
+    select:focus { border-color: var(--teal); }
+    select:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #parse-summary {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      min-height: 1.2em;
+      margin-top: 0.5rem;
+    }
+    #parse-summary.ok { color: var(--success); }
+    #parse-summary.err { color: var(--danger); }
+
+    .slider-row { display: flex; align-items: center; gap: 0.75rem; }
+    .slider-row label { font-size: 0.8rem; color: var(--text-dim); white-space: nowrap; }
+    #silence-val { font-size: 0.85rem; color: var(--teal); min-width: 2.5em; text-align: right; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      padding: 0.65rem 1.4rem;
+      border: none; border-radius: 8px;
+      font-size: 0.95rem; font-weight: 600;
+      cursor: pointer; transition: filter 0.15s, transform 0.1s;
+    }
+    .btn:hover:not(:disabled) { filter: brightness(1.15); }
+    .btn:active:not(:disabled) { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-primary { background: var(--teal); color: #000; }
+    .btn-amber  { background: var(--amber); color: #000; }
+    .btn-ghost  { background: transparent; color: var(--text); border: 1px solid #2a2a6a; }
+    .btn-danger { background: var(--danger); color: #fff; }
+
+    #start-btn { width: 100%; margin-top: 0.5rem; justify-content: center; font-size: 1.05rem; padding: 0.8rem; }
+
+    /* ── REHEARSAL ── */
+    #status-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      background: var(--bg2);
+      border-radius: var(--radius);
+      padding: 0.7rem 1rem;
+      margin-bottom: 0.75rem;
+      border: 1px solid #2a2a6a;
+    }
+    #status-label {
+      font-size: 1rem; font-weight: 700; letter-spacing: 0.03em;
+    }
+    #status-label.reading  { color: var(--teal); }
+    #status-label.listening { color: var(--amber); }
+    #status-label.paused   { color: var(--text-dim); }
+    #status-label.done     { color: var(--success); }
+
+    #controls { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+
+    /* ── MIC PANEL ── */
+    #mic-panel {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    #mic-panel.active { display: flex; }
+
+    #mic-circle {
+      width: 64px; height: 64px;
+      border-radius: 50%;
+      background: var(--amber);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.8rem;
+      animation: mic-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes mic-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,183,3,0.6); }
+      50%       { box-shadow: 0 0 0 18px rgba(255,183,3,0); }
+    }
+
+    #live-transcript {
+      font-size: 0.85rem; color: var(--text-dim);
+      min-height: 1.4em; text-align: center;
+      max-width: 500px; font-style: italic;
+    }
+
+    #hint-box {
+      background: rgba(255,183,3,0.12);
+      border: 1px solid rgba(255,183,3,0.3);
+      border-radius: 8px;
+      padding: 0.6rem 1rem;
+      font-size: 0.88rem;
+      color: var(--amber);
+      max-width: 100%;
+      text-align: center;
+      display: none;
+    }
+
+    /* ── SCRIPT VIEW ── */
+    #script-view {
+      background: var(--bg2);
+      border-radius: var(--radius);
+      border: 1px solid #2a2a6a;
+      max-height: 55vh;
+      overflow-y: auto;
+      padding: 1rem;
+      scroll-behavior: smooth;
+    }
+
+    .cue {
+      margin-bottom: 1rem;
+      padding: 0.6rem 0.8rem;
+      border-radius: 6px;
+      transition: opacity 0.3s, background 0.3s;
+      opacity: 0.35;
+    }
+    .cue.past { opacity: 0.2; }
+    .cue.active {
+      opacity: 1;
+      background: rgba(0,180,216,0.12);
+      border-left: 3px solid var(--teal);
+    }
+    .cue.mine.active {
+      background: rgba(255,183,3,0.12);
+      border-left-color: var(--amber);
+    }
+    .cue.upcoming { opacity: 0.55; }
+
+    .cue-char {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: var(--teal);
+      text-transform: uppercase;
+      margin-bottom: 0.25rem;
+    }
+    .cue.mine .cue-char { color: var(--amber); }
+    .cue-text { font-size: 0.92rem; line-height: 1.55; }
+
+    /* ── TOAST ── */
+    #toast {
+      position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%);
+      background: #2a2a4a; color: var(--text);
+      padding: 0.65rem 1.2rem;
+      border-radius: 30px;
+      font-size: 0.88rem;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s;
+      z-index: 999;
+      max-width: 90vw;
+      text-align: center;
+    }
+    #toast.show { opacity: 1; }
+
+    /* ── CHROME WARNING ── */
+    #browser-warn {
+      background: rgba(230,57,70,0.15);
+      border: 1px solid var(--danger);
+      border-radius: 8px;
+      padding: 0.6rem 1rem;
+      font-size: 0.82rem;
+      color: #ffaaaa;
+      margin-bottom: 1rem;
+      display: none;
+    }
+
+    /* Scrollbar */
+    #script-view::-webkit-scrollbar { width: 6px; }
+    #script-view::-webkit-scrollbar-track { background: var(--bg); }
+    #script-view::-webkit-scrollbar-thumb { background: #2a2a6a; border-radius: 3px; }
+
+    @media (max-width: 500px) {
+      h1 { font-size: 1.4rem; }
+      .form-row { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+
+<h1>🎭 WhatsMyLine</h1>
+<p class="tagline">Your AI rehearsal partner — upload a script, pick your character, start running lines.</p>
+
+<div id="browser-warn">
+  ⚠️ Speech features require <strong>Google Chrome</strong>. Other browsers may not support the Web Speech API.
+</div>
+
+<!-- ══════════════ SETUP SCREEN ══════════════ -->
+<div id="setup-screen">
+
+  <div class="card">
+    <h2>📄 Upload Script</h2>
+    <div id="drop-zone">
+      <input type="file" id="file-input" accept=".pdf,.txt" />
+      <span class="drop-icon">📂</span>
+      <div class="drop-label">Drop a PDF or TXT screenplay here</div>
+      <div class="drop-hint">or click to browse</div>
+    </div>
+    <div id="file-name"></div>
+    <div id="parse-summary"></div>
+  </div>
+
+  <div class="card">
+    <h2>🎭 Your Character</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="char-select">Select your character</label>
+        <select id="char-select" disabled>
+          <option value="">— upload a script first —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="scene-select">Start from</label>
+        <select id="scene-select" disabled>
+          <option value="0">Beginning</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🌐 Language &amp; Voice</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="lang-select">Language</label>
+        <select id="lang-select">
+          <option value="en-US">English (en-US)</option>
+          <option value="da-DK">Dansk (da-DK)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="voice-select">TTS Voice</label>
+        <select id="voice-select">
+          <option value="">— loading voices… —</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🔇 Silence Sensitivity</h2>
+    <div class="slider-row">
+      <label for="silence-slider">Pause before advancing:</label>
+      <input type="range" id="silence-slider" min="1" max="4" step="0.5" value="2" style="flex:1;" />
+      <span id="silence-val">2.0 s</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🎯 Line Accuracy</h2>
+    <div class="slider-row">
+      <label for="accuracy-slider">Required match to advance:</label>
+      <input type="range" id="accuracy-slider" min="0" max="100" step="5" value="0" style="flex:1;" />
+      <span id="accuracy-val">Off</span>
+    </div>
+    <div style="font-size:0.78rem;color:var(--text-dim);margin-top:0.5rem;">
+      Off = any speech advances &nbsp;·&nbsp; 100% = must say the full line accurately
+    </div>
+  </div>
+
+  <button class="btn btn-primary" id="start-btn" disabled>▶ Start Rehearsal</button>
+</div>
+
+<!-- ══════════════ REHEARSAL SCREEN ══════════════ -->
+<div id="rehearsal-screen">
+
+  <div id="status-bar">
+    <span id="status-label">—</span>
+    <div id="controls">
+      <button class="btn btn-ghost" id="pause-btn">⏸ Pause</button>
+      <button class="btn btn-amber" id="skip-btn">⏭ Skip</button>
+      <button class="btn btn-ghost" id="hint-btn">💡 Hint</button>
+      <button class="btn btn-ghost" id="restart-btn">🔄 Restart</button>
+      <button class="btn btn-ghost" id="back-btn">← Setup</button>
+    </div>
+  </div>
+
+  <div id="mic-panel">
+    <div id="mic-circle">🎙</div>
+    <div id="live-transcript"></div>
+    <div id="hint-box"></div>
+  </div>
+
+  <div id="script-view"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ════════════════════════════════════════════════════════
+//  GLOBALS
+// ════════════════════════════════════════════════════════
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+let cueList          = [];
+let sceneMarkers     = [];   // [{label, startCueIndex}]
+let cueIndex         = 0;
+let myCharacter      = '';
+let appState         = 'idle';   // idle | reading | listening | paused | done
+let silenceTimer     = null;
+let stallGuard       = null;
+let isPaused         = false;
+let hintVisible      = false;
+let recognition      = null;     // single persistent instance
+let sessionTranscript = '';      // accumulated spoken text for current user turn
+let voices           = [];
+let selectedLang     = 'en-US';
+let silenceDelay     = 2000;
+let accuracyThreshold = 0;       // 0–100
+
+const synth = window.speechSynthesis;
+
+// ════════════════════════════════════════════════════════
+//  BROWSER CHECK
+// ════════════════════════════════════════════════════════
+const isChrome = /Chrome/.test(navigator.userAgent) && !/Edg/.test(navigator.userAgent);
+if (!isChrome) {
+  document.getElementById('browser-warn').style.display = 'block';
+}
+
+// ════════════════════════════════════════════════════════
+//  VOICES
+// ════════════════════════════════════════════════════════
+function loadVoices() {
+  voices = synth.getVoices();
+  populateVoiceSelect();
+}
+synth.onvoiceschanged = loadVoices;
+loadVoices();
+
+// Android / some mobile browsers don't fire onvoiceschanged reliably.
+// Poll for up to 3 seconds after page load as a fallback.
+if (voices.length === 0) {
+  let pollCount = 0;
+  const voicePoll = setInterval(() => {
+    voices = synth.getVoices();
+    if (voices.length > 0 || ++pollCount >= 30) {
+      clearInterval(voicePoll);
+      if (voices.length > 0) populateVoiceSelect();
+    }
+  }, 100);
+}
+
+function populateVoiceSelect() {
+  const sel = document.getElementById('voice-select');
+  const lang = document.getElementById('lang-select').value;
+  const prefix = lang.substring(0, 2); // 'en' or 'da'
+  const filtered = voices.filter(v => v.lang.startsWith(prefix));
+
+  sel.innerHTML = '';
+  // "Default" option always comes first — works on every device even with no
+  // explicit voice (browser/OS picks the system TTS voice automatically).
+  const defOpt = document.createElement('option');
+  defOpt.value = '';
+  defOpt.textContent = filtered.length === 0 ? '— Default (system voice) —' : '— Default —';
+  sel.appendChild(defOpt);
+
+  filtered.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v.name;
+    opt.textContent = `${v.name} (${v.lang})`;
+    sel.appendChild(opt);
+  });
+}
+
+document.getElementById('lang-select').addEventListener('change', e => {
+  selectedLang = e.target.value;
+  populateVoiceSelect();
+});
+
+// ════════════════════════════════════════════════════════
+//  SLIDERS
+// ════════════════════════════════════════════════════════
+
+// — Silence —
+const silenceSlider = document.getElementById('silence-slider');
+const silenceVal    = document.getElementById('silence-val');
+
+function updateSilenceDelay() {
+  const v = parseFloat(silenceSlider.value);
+  silenceDelay = v * 1000;
+  silenceVal.textContent = v.toFixed(1) + ' s';
+  localStorage.setItem('wml_silence', v);
+}
+const savedSilence = parseFloat(localStorage.getItem('wml_silence'));
+if (!isNaN(savedSilence) && savedSilence >= 1 && savedSilence <= 4) silenceSlider.value = savedSilence;
+updateSilenceDelay();
+silenceSlider.addEventListener('input', updateSilenceDelay);
+
+// — Accuracy —
+const accuracySlider = document.getElementById('accuracy-slider');
+const accuracyVal    = document.getElementById('accuracy-val');
+
+function updateAccuracyThreshold() {
+  const v = parseInt(accuracySlider.value, 10);
+  accuracyThreshold = v;
+  if (v === 0)        accuracyVal.textContent = 'Off';
+  else if (v === 100) accuracyVal.textContent = '100% (exact)';
+  else                accuracyVal.textContent = v + '%';
+  localStorage.setItem('wml_accuracy', v);
+}
+const savedAccuracy = parseInt(localStorage.getItem('wml_accuracy'), 10);
+if (!isNaN(savedAccuracy) && savedAccuracy >= 0 && savedAccuracy <= 100) accuracySlider.value = savedAccuracy;
+updateAccuracyThreshold();
+accuracySlider.addEventListener('input', updateAccuracyThreshold);
+
+// ════════════════════════════════════════════════════════
+//  FILE UPLOAD & PARSING
+// ════════════════════════════════════════════════════════
+const dropZone  = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+fileInput.addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) handleFile(file);
+});
+
+async function handleFile(file) {
+  document.getElementById('file-name').textContent = file.name;
+  document.getElementById('parse-summary').textContent = 'Parsing…';
+  document.getElementById('parse-summary').className = '';
+  dropZone.classList.add('has-file');
+
+  try {
+    let rawLines = [];
+    if (file.name.toLowerCase().endsWith('.pdf')) {
+      rawLines = await extractPdfLines(file);
+    } else {
+      rawLines = await extractTxtLines(file);
+    }
+    const parsed = parseScript(rawLines);
+    cueList      = parsed.cues;
+    sceneMarkers = parsed.markers;
+
+    if (cueList.length === 0) {
+      setSummary('No dialogue cues detected. Try a different file.', 'err');
+      return;
+    }
+
+    const chars = [...new Set(cueList.map(c => c.character))].sort();
+    populateCharSelect(chars);
+    populateSceneSelect(sceneMarkers);
+
+    setSummary(
+      `✓ ${cueList.length} cues · ${chars.length} characters: ${chars.slice(0,5).join(', ')}${chars.length > 5 ? '…' : ''}`,
+      'ok'
+    );
+  } catch (err) {
+    setSummary('Error parsing file: ' + err.message, 'err');
+    console.error(err);
+  }
+}
+
+function setSummary(msg, cls) {
+  const el = document.getElementById('parse-summary');
+  el.textContent = msg;
+  el.className = cls || '';
+}
+
+// ── PDF extraction ──
+async function extractPdfLines(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const rawLines = [];
+
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+
+    // ── Dominant-font detection ──────────────────────────────────────────
+    // PDF.js exposes internal resource names (e.g. "g_d0_f3"), not the
+    // PostScript names that contain "Italic". Instead we find the dominant
+    // font by character count: dialogue is always the bulk of text on a page,
+    // so the majority font = dialogue font. Lines using a minority font are
+    // stage directions (italic/underline/etc in the original PDF).
+    const fontFreq = new Map();
+    for (const item of content.items) {
+      if (!item.str || !item.str.trim()) continue;
+      const f = item.fontName || '';
+      fontFreq.set(f, (fontFreq.get(f) || 0) + item.str.length);
+    }
+    const baseFont = [...fontFreq.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+
+    // Group items by Y coordinate (±2px tolerance)
+    const rowMap = new Map();
+    for (const item of content.items) {
+      if (!item.str) continue;
+      const y = Math.round(item.transform[5]);
+      let key = null;
+      for (const [k] of rowMap) {
+        if (Math.abs(k - y) <= 2) { key = k; break; }
+      }
+      const nonBase = (item.fontName || '') !== baseFont;
+      const entry = { x: item.transform[4], str: item.str, nonBase, len: item.str.length };
+      if (key === null) {
+        rowMap.set(y, [entry]);
+      } else {
+        rowMap.get(key).push(entry);
+      }
+    }
+
+    // Sort rows top→bottom (higher Y = higher on page in PDF coords)
+    const sortedRows = [...rowMap.entries()].sort((a, b) => b[0] - a[0]);
+    for (const [, items] of sortedRows) {
+      items.sort((a, b) => a.x - b.x);
+      const text = items.map(i => i.str).join(' ').trim();
+      if (!text) continue;
+      // Row is a stage direction if the majority of its characters use a
+      // non-dominant font (italic, underlined, etc.)
+      const totalLen = items.reduce((s, i) => s + i.len, 0);
+      const nonBaseLen = items.filter(i => i.nonBase).reduce((s, i) => s + i.len, 0);
+      const italic = totalLen > 0 && nonBaseLen / totalLen > 0.5;
+      rawLines.push({ text, italic });
+    }
+  }
+  return rawLines;
+}
+
+// ── TXT extraction ──
+function extractTxtLines(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const lines = e.target.result.split('\n').map(l => l.trim());
+      resolve(lines);
+    };
+    reader.onerror = reject;
+    reader.readAsText(file);
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  PARSER
+// ════════════════════════════════════════════════════════
+const CHAR_BLOCKLIST = [
+  // English screenplay markers
+  'INT', 'EXT', 'CUT TO', 'FADE IN', 'FADE OUT', 'FADE TO',
+  'TITLE', 'THE END', 'CONTINUED', 'INTERCUT', 'SMASH CUT', 'BACK TO',
+  // Structural / section headers (English + Danish theatre)
+  'SCENE', 'ACT', 'AKT', 'DEL', 'ANSLAG', 'ROLLELISTE', 'KARAKTERER',
+  'PROLOG', 'EPILOG', 'NOTER', 'STATIST', 'STEMME', 'SPEAKER',
+  'PAUSE', 'BLACKOUT', 'STILHED', 'SILENCE',
+];
+
+// Prefixes that mark scene/act/section boundaries (subset of blocklist)
+const SCENE_MARKER_PREFIXES = [
+  'SCENE', 'ACT', 'AKT', 'DEL', 'INT', 'EXT',
+  'ANSLAG', 'PROLOG', 'EPILOG',
+];
+
+// All-caps structural lines that should break parser state but NOT become cues or scene markers
+// (stage directions, production notes, etc. from the blocklist)
+function isStructuralBreak(line) {
+  const t = line.trim();
+  if (!t || t !== t.toUpperCase()) return false;
+  for (const blocked of CHAR_BLOCKLIST) {
+    if (t === blocked || t.startsWith(blocked + ' ') || t.startsWith(blocked + '.')) return true;
+  }
+  return false;
+}
+
+function isSceneHeader(line) {
+  const t = line.trim();
+  if (!t || t !== t.toUpperCase()) return false;
+  for (const prefix of SCENE_MARKER_PREFIXES) {
+    if (t === prefix || t.startsWith(prefix + ' ') || t.startsWith(prefix + '.')) return true;
+  }
+  return false;
+}
+
+function isPageNumber(line) {
+  const t = line.trim();
+  if (/^\d+$/.test(t)) return true;               // "5"
+  if (/^-\s*\d+\s*-$/.test(t)) return true;       // "- 5 -"
+  if (/^(side|page)\s+\d+$/i.test(t)) return true; // "Side 5", "Page 5"
+  return false;
+}
+
+function isCharacterName(line) {
+  const t = line.trim();
+  if (t.length < 1 || t.length > 35) return false;
+  if (t !== t.toUpperCase()) return false;
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length > 4) return false;
+  if (/[.!?,:\-\u2013\u2014]/.test(t)) return false;  // apostrophes allowed; catches –—
+  if (/^\d+$/.test(t)) return false;       // pure number
+  for (const blocked of CHAR_BLOCKLIST) {
+    if (t === blocked || t.startsWith(blocked + ' ')) return false;
+  }
+  return true;
+}
+
+function stripParenthetical(name) {
+  return name.replace(/\s*\(.*?\)\s*$/, '').trim();
+}
+
+function parseScript(rawLines) {
+  const cues = [];
+  const markers = [];   // scene/act boundary markers
+  let state = 'seeking';
+  let currentChar = null;
+  let buffer = [];
+
+  function flush() {
+    if (currentChar && buffer.length > 0) {
+      cues.push({ character: currentChar, lines: buffer.join(' ') });
+    }
+    buffer = [];
+  }
+
+  for (const rawItem of rawLines) {
+    // Support both plain strings (TXT) and {text, italic} objects (PDF)
+    const rawText = typeof rawItem === 'string' ? rawItem : rawItem.text;
+    const isItalic = typeof rawItem === 'object' && rawItem.italic;
+
+    const line = rawText.trim();
+    if (!line) continue;
+    if (isPageNumber(line)) continue;                          // page numbers
+    if (line.startsWith('(') && line.endsWith(')')) continue; // parenthetical direction
+
+    // Scene/act/section header — record as a marker and reset to seeking
+    if (isSceneHeader(line)) {
+      flush();
+      state = 'seeking';
+      markers.push({ label: line, startCueIndex: cues.length });
+      continue;
+    }
+
+    // Other structural/production lines (BLACKOUT, FADE OUT, PAUSE, etc.) —
+    // flush current cue and reset; never push these into a dialogue buffer
+    if (isStructuralBreak(line)) {
+      flush();
+      state = 'seeking';
+      continue;
+    }
+
+    if (isCharacterName(line)) {
+      flush();
+      currentChar = stripParenthetical(line);
+      state = 'collecting';
+    } else if (state === 'collecting') {
+      // Non-base-font lines (italic/underlined stage directions) — skip.
+      // Checked here, after isCharacterName, so bold/styled character names
+      // are never accidentally dropped.
+      if (isItalic) continue;
+
+      // Support simple "CHARACTER: dialogue" format for TXT
+      const colonIdx = line.indexOf(':');
+      if (colonIdx > 0 && colonIdx < 36) {
+        const potentialChar = line.substring(0, colonIdx).trim();
+        if (isCharacterName(potentialChar)) {
+          flush();
+          currentChar = stripParenthetical(potentialChar);
+          const dialogue = line.substring(colonIdx + 1).trim();
+          if (dialogue) buffer.push(dialogue);
+          continue;
+        }
+      }
+      buffer.push(line);
+    } else {
+      // seeking — also try colon format
+      const colonIdx = line.indexOf(':');
+      if (colonIdx > 0 && colonIdx < 36) {
+        const potentialChar = line.substring(0, colonIdx).trim();
+        if (isCharacterName(potentialChar)) {
+          flush();
+          currentChar = stripParenthetical(potentialChar);
+          state = 'collecting';
+          const dialogue = line.substring(colonIdx + 1).trim();
+          if (dialogue) buffer.push(dialogue);
+        }
+      }
+    }
+  }
+  flush();
+  return { cues, markers };
+}
+
+// ════════════════════════════════════════════════════════
+//  CHARACTER SELECT
+// ════════════════════════════════════════════════════════
+function populateCharSelect(chars) {
+  const sel = document.getElementById('char-select');
+  sel.innerHTML = '<option value="">— select your character —</option>';
+  chars.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c;
+    opt.textContent = c;
+    sel.appendChild(opt);
+  });
+  sel.disabled = false;
+  checkStartReady();
+}
+
+function populateSceneSelect(markers) {
+  const sel = document.getElementById('scene-select');
+  sel.innerHTML = '<option value="0">Beginning</option>';
+  markers.forEach((m, i) => {
+    const opt = document.createElement('option');
+    opt.value = m.startCueIndex;
+    opt.textContent = m.label;
+    sel.appendChild(opt);
+  });
+  sel.disabled = markers.length === 0;
+}
+
+document.getElementById('char-select').addEventListener('change', checkStartReady);
+
+function checkStartReady() {
+  const charVal = document.getElementById('char-select').value;
+  document.getElementById('start-btn').disabled = !charVal;
+}
+
+// ════════════════════════════════════════════════════════
+//  SCRIPT VIEW RENDERING
+// ════════════════════════════════════════════════════════
+function renderScript() {
+  prevHighlight = -1;
+  const view = document.getElementById('script-view');
+  // Build all cue HTML in a fragment to minimise reflows
+  const frag = document.createDocumentFragment();
+  cueList.forEach((cue, i) => {
+    const div = document.createElement('div');
+    div.className = 'cue upcoming' + (cue.character === myCharacter ? ' mine' : '');
+    div.id = `cue-${i}`;
+    div.innerHTML = `<div class="cue-char">${escHtml(cue.character)}</div><div class="cue-text">${escHtml(cue.lines)}</div>`;
+    frag.appendChild(div);
+  });
+  view.innerHTML = '';
+  view.appendChild(frag);
+}
+
+let prevHighlight = -1;
+function highlightCue(index) {
+  // Only touch the previously-active and newly-active cues instead of iterating all
+  if (prevHighlight >= 0) {
+    const prev = document.getElementById(`cue-${prevHighlight}`);
+    if (prev) {
+      prev.classList.remove('active', 'upcoming');
+      prev.classList.add('past');
+    }
+  }
+  const active = document.getElementById(`cue-${index}`);
+  if (active) {
+    active.classList.remove('past', 'upcoming');
+    active.classList.add('active');
+    active.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  prevHighlight = index;
+}
+
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ════════════════════════════════════════════════════════
+//  STATE MACHINE
+// ════════════════════════════════════════════════════════
+function setState(state) {
+  appState = state;
+  const label = document.getElementById('status-label');
+  const micPanel = document.getElementById('mic-panel');
+  const skipBtn = document.getElementById('skip-btn');
+  const pauseBtn = document.getElementById('pause-btn');
+
+  label.className = state;
+  skipBtn.disabled = true;
+  micPanel.classList.remove('active');
+
+  switch (state) {
+    case 'reading':
+      label.textContent = '🔊 Reading…';
+      pauseBtn.textContent = '⏸ Pause';
+      skipBtn.disabled = false;
+      break;
+    case 'listening':
+      label.textContent = '🎙 Your turn!';
+      micPanel.classList.add('active');
+      skipBtn.disabled = false;
+      pauseBtn.textContent = '⏸ Pause';
+      break;
+    case 'paused':
+      label.textContent = '⏸ Paused';
+      pauseBtn.textContent = '▶ Resume';
+      break;
+    case 'done':
+      label.textContent = '✅ Scene complete!';
+      pauseBtn.textContent = '⏸ Pause';
+      break;
+    default:
+      label.textContent = '—';
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  TTS
+// ════════════════════════════════════════════════════════
+function getVoice() {
+  const sel = document.getElementById('voice-select');
+  const name = sel.value;
+  return voices.find(v => v.name === name) || null;
+}
+
+function speakLines(text, onDone) {
+  synth.cancel();
+  clearStallGuard();
+
+  const utt = new SpeechSynthesisUtterance(text);
+  utt.lang = selectedLang;
+  const v = getVoice();
+  if (v) utt.voice = v;
+  utt.rate = 1.0;
+
+  utt.onend = () => {
+    clearStallGuard();
+    if (appState === 'reading') onDone();
+  };
+  utt.onerror = (e) => {
+    if (e.error === 'interrupted' || e.error === 'canceled') return;
+    console.warn('TTS error:', e.error);
+    clearStallGuard();
+    if (appState === 'reading') onDone();
+  };
+
+  synth.speak(utt);
+
+  // Chrome stall guard — scale timeout with text length (~80ms per char, minimum 10s)
+  const guardMs = Math.max(10000, text.length * 80);
+  stallGuard = setTimeout(() => {
+    if (appState === 'reading' && !synth.speaking && !synth.pending) {
+      console.warn('TTS stall detected, advancing.');
+      onDone();
+    }
+  }, guardMs);
+}
+
+function clearStallGuard() {
+  if (stallGuard) { clearTimeout(stallGuard); stallGuard = null; }
+}
+
+// ════════════════════════════════════════════════════════
+//  PERSISTENT SPEECH RECOGNITION
+//  Created once on Start; kept alive between cues so the
+//  browser never re-prompts for mic permission.
+// ════════════════════════════════════════════════════════
+
+function initRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    showToast('Speech recognition not supported — mic features disabled.');
+    return false;
+  }
+
+  recognition = new SR();
+  recognition.continuous     = true;
+  recognition.interimResults = true;
+  recognition.lang           = selectedLang;
+
+  recognition.onresult = (e) => {
+    if (appState !== 'listening') return;
+    clearSilenceTimers();
+
+    let finalText = '', interimText = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalText += t;
+      else interimText += t;
+    }
+    if (finalText) sessionTranscript += (sessionTranscript ? ' ' : '') + finalText.trim();
+
+    const displayText = (sessionTranscript + (interimText ? ' ' + interimText : '')).trim();
+    document.getElementById('live-transcript').textContent = displayText || '… listening …';
+
+    // ── "What's my line?" trigger ──
+    if (/what'?s?\s+my\s+line/i.test(displayText)) {
+      const firstWord = getFirstWord(cueList[cueIndex]?.lines || '');
+      if (firstWord) {
+        clearSilenceTimers();
+        sessionTranscript = '';   // reset so user can try again after hint
+        speakHint(firstWord);
+        return;
+      }
+    }
+
+    // ── Accuracy + silence logic ──
+    if (finalText) {
+      if (accuracyThreshold === 0) {
+        // Any speech is fine — set silence timer
+        silenceTimer = setTimeout(() => advanceCue(), silenceDelay);
+      } else {
+        const score = lineAccuracy(sessionTranscript, cueList[cueIndex]?.lines || '');
+        const pct   = Math.round(score * 100);
+        if (score >= accuracyThreshold / 100) {
+          document.getElementById('live-transcript').textContent =
+            displayText + ` ✓ (${pct}% match)`;
+          silenceTimer = setTimeout(() => advanceCue(), silenceDelay);
+        } else {
+          document.getElementById('live-transcript').textContent =
+            displayText + ` · ${pct}% — need ${accuracyThreshold}%`;
+          // Clear transcript after 2s so the user can try again from scratch
+          silenceTimer = setTimeout(() => {
+            sessionTranscript = '';
+            document.getElementById('live-transcript').textContent = '… try again …';
+          }, 2000);
+        }
+      }
+    } else if (accuracyThreshold === 0) {
+      // Interim only — set a longer fallback timer (skip when accuracy mode is on)
+      silenceTimer = setTimeout(() => advanceCue(), Math.max(silenceDelay, 2500));
+    }
+  };
+
+  recognition.onspeechend = () => {
+    if (appState !== 'listening') return;
+    // Only auto-advance on speech-end when accuracy check is off
+    if (accuracyThreshold === 0) {
+      clearSilenceTimers();
+      silenceTimer = setTimeout(() => advanceCue(), 800);
+    }
+  };
+
+  recognition.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'permission-denied') {
+      showToast('🎙 Microphone access denied. Please allow mic access and reload.');
+      setState('paused');
+      isPaused = true;
+    } else if (e.error === 'no-speech' || e.error === 'aborted') {
+      // ignore — handled by absolute timer / intentional stop
+    } else {
+      console.warn('STT error:', e.error);
+    }
+  };
+
+  recognition.onend = () => {
+    // Keep mic alive — auto-restart unless we deliberately shut down
+    if (appState !== 'idle' && appState !== 'done' && !isPaused && recognition) {
+      try { recognition.start(); } catch(err) {}
+    }
+  };
+
+  try {
+    recognition.start();
+    return true;
+  } catch(e) {
+    console.warn('Recognition start failed:', e);
+    return false;
+  }
+}
+
+// Called each time it's the user's turn — recognition is already running
+function startListening() {
+  sessionTranscript = '';
+  document.getElementById('live-transcript').textContent = '… listening …';
+  // No absolute timeout — wait indefinitely until the user speaks
+}
+
+function clearSilenceTimers() {
+  if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+}
+
+// Between cues (reading state): just clear timers — recognition keeps running
+function pauseRecognition() {
+  clearSilenceTimers();
+}
+
+// Full shutdown: back-to-setup, session done
+function shutdownRecognition() {
+  clearSilenceTimers();
+  if (recognition) {
+    recognition.onend = null;   // prevent auto-restart
+    try { recognition.stop(); } catch(e) {}
+    recognition = null;
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────
+
+function getFirstWord(text) {
+  return text.trim().split(/\s+/)[0] || '';
+}
+
+function speakHint(text) {
+  synth.cancel();
+  const utt = new SpeechSynthesisUtterance(text);
+  utt.lang = selectedLang;
+  const v = getVoice();
+  if (v) utt.voice = v;
+  utt.onend = () => {
+    if (appState === 'listening') {
+      document.getElementById('live-transcript').textContent = '… listening …';
+    }
+  };
+  synth.speak(utt);
+}
+
+// Word-overlap accuracy: what fraction of the expected words appear in spoken
+function lineAccuracy(spoken, expected) {
+  if (!expected) return 0;
+  // Strip punctuation/symbols but keep all Unicode letters (æøå, accented chars, etc.)
+  const norm = s => s.toLowerCase().replace(/[^\p{L}\s]/gu, '').split(/\s+/).filter(Boolean);
+  const spokenWords   = norm(spoken);
+  const expectedWords = norm(expected);
+  if (expectedWords.length === 0) return 1;
+  const pool = [...spokenWords];
+  let matched = 0;
+  for (const w of expectedWords) {
+    const idx = pool.indexOf(w);
+    if (idx !== -1) { matched++; pool.splice(idx, 1); }
+  }
+  return matched / expectedWords.length;
+}
+
+// ════════════════════════════════════════════════════════
+//  PLAYBACK LOOP
+// ════════════════════════════════════════════════════════
+function playCue(index) {
+  cueIndex = index;
+  if (index >= cueList.length) {
+    setState('done');
+    return;
+  }
+  const cue = cueList[index];
+  highlightCue(index);
+
+  if (cue.character === myCharacter) {
+    setState('listening');
+    document.getElementById('hint-box').textContent = cue.lines;
+    if (!hintVisible) document.getElementById('hint-box').style.display = 'none';
+    else              document.getElementById('hint-box').style.display = 'block';
+    startListening();
+  } else {
+    setState('reading');
+    speakLines(cue.lines, () => playCue(index + 1));
+  }
+}
+
+function advanceCue() {
+  pauseRecognition();
+  playCue(cueIndex + 1);
+}
+
+// ════════════════════════════════════════════════════════
+//  CONTROLS
+// ════════════════════════════════════════════════════════
+document.getElementById('start-btn').addEventListener('click', async () => {
+  myCharacter  = document.getElementById('char-select').value.toUpperCase();
+  selectedLang = document.getElementById('lang-select').value;
+  if (!myCharacter || cueList.length === 0) return;
+
+  // Pre-warm mic permission on desktop (requires HTTPS / secure context).
+  // On Android file:// or non-HTTPS pages mediaDevices may be unavailable —
+  // in that case skip the pre-warm and let SpeechRecognition prompt itself.
+  if (navigator.mediaDevices?.getUserMedia) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(t => t.stop());
+    } catch(e) {
+      if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+        showToast('🎙 Microphone access denied. Please allow mic access and try again.');
+        return;
+      }
+      // Any other error (NotSupportedError, etc.) — fall through and let
+      // SpeechRecognition request permission on its own.
+    }
+  }
+
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('rehearsal-screen').style.display = 'block';
+
+  renderScript();
+  isPaused   = false;
+  hintVisible = false;
+  setState('idle');
+
+  // Init the persistent recognition instance (asks permission once above)
+  initRecognition();
+
+  const startIndex = parseInt(document.getElementById('scene-select').value, 10) || 0;
+  playCue(startIndex);
+});
+
+document.getElementById('pause-btn').addEventListener('click', () => {
+  if (appState === 'paused') {
+    // Resume
+    isPaused = false;
+    // Re-init recognition (it was shut down on pause)
+    if (!recognition) initRecognition();
+    if (cueList[cueIndex] && cueList[cueIndex].character === myCharacter) {
+      setState('listening');
+      startListening();
+    } else {
+      playCue(cueIndex);
+    }
+  } else {
+    // Pause — shut down recognition so mic light turns off
+    isPaused = true;
+    synth.cancel();
+    shutdownRecognition();
+    setState('paused');
+  }
+});
+
+document.getElementById('skip-btn').addEventListener('click', () => {
+  if (appState === 'listening') {
+    advanceCue();
+  } else if (appState === 'reading') {
+    synth.cancel();
+    clearStallGuard();
+    pauseRecognition();
+    playCue(cueIndex + 1);
+  }
+});
+
+document.getElementById('hint-btn').addEventListener('click', () => {
+  hintVisible = !hintVisible;
+  const box = document.getElementById('hint-box');
+  if (hintVisible && appState === 'listening') {
+    box.style.display = 'block';
+    box.textContent = cueList[cueIndex]?.lines || '';
+  } else {
+    box.style.display = 'none';
+  }
+  document.getElementById('hint-btn').textContent = hintVisible ? '🙈 Hide Hint' : '💡 Hint';
+});
+
+document.getElementById('restart-btn').addEventListener('click', () => {
+  synth.cancel();
+  pauseRecognition();
+  isPaused = false;
+  if (!recognition) initRecognition();
+  const startIndex = parseInt(document.getElementById('scene-select').value, 10) || 0;
+  playCue(startIndex);
+});
+
+document.getElementById('back-btn').addEventListener('click', () => {
+  synth.cancel();
+  shutdownRecognition();
+  setState('idle');
+  isPaused = false;
+  document.getElementById('rehearsal-screen').style.display = 'none';
+  document.getElementById('setup-screen').style.display = 'block';
+});
+
+// ════════════════════════════════════════════════════════
+//  TOAST
+// ════════════════════════════════════════════════════════
+let toastTimer = null;
+function showToast(msg, duration = 3500) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), duration);
+}
+</script>
+</body>
+</html>
