@@ -4,14 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>WhatsMyLine — Line Learner</title>
+  <!-- Cross-Origin Isolation for SharedArrayBuffer (needed by Piper WASM).
+       coi-serviceworker.js must live in the same folder as index.html.
+       On Netlify, add a _headers file instead (see README below). -->
+  <script src="coi-serviceworker.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script type="module">
-    // Make pipeline available globally for the inline script below
-    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/dist/transformers.min.js';
-    env.allowLocalModels = false;
-    window._transformersPipeline = pipeline;
-    window._transformersEnv = env;
-    window.dispatchEvent(new Event('transformers-ready'));
+    // Expose vits-web (Piper WASM) globally for the inline script
+    import * as tts from 'https://cdn.jsdelivr.net/npm/@diffusionstudio/vits-web@1.0.3/dist/index.js';
+    window._piperTts = tts;
+    window.dispatchEvent(new Event('piper-ready'));
   </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -391,10 +393,10 @@
     </div>
     <label style="font-size:0.8rem;color:var(--text-dim);">Voice engine</label>
     <div class="voice-mode-row">
-      <div class="voice-mode-btn active" id="vmode-mms" onclick="setVoiceMode('mms')">🤖 MMS (on-device AI)</div>
+      <div class="voice-mode-btn active" id="vmode-mms" onclick="setVoiceMode('piper')">🤖 Piper (on-device AI)</div>
       <div class="voice-mode-btn" id="vmode-browser" onclick="setVoiceMode('browser')">🔊 System TTS</div>
     </div>
-    <div id="mms-status">MMS not loaded yet — will download on first rehearsal start.</div>
+    <div id="mms-status">Piper voice not downloaded yet — will download on first rehearsal start.</div>
   </div>
 
   <div class="card">
@@ -436,7 +438,7 @@
   </div>
 
   <div id="mms-load-bar">
-    <div id="mms-load-label">⏳ Downloading MMS voice model…</div>
+    <div id="mms-load-label">⏳ Downloading Piper voice model…</div>
     <div id="mms-progress-track"><div id="mms-progress-fill"></div></div>
   </div>
 
@@ -968,7 +970,11 @@ function setState(state) {
 }
 
 // ════════════════════════════════════════════════════════
-//  TTS — MMS on-device (Transformers.js) with browser fallback
+//  TTS — Piper on-device (vits-web / ONNX WASM) with browser fallback
+//
+//  English : en_US-hfc_male-medium   (~63 MB, cached in OPFS after first load)
+//  Danish  : da_DK-talesyntese-medium (~63 MB, cached in OPFS after first load)
+//  Fallback: browser Web Speech API
 // ════════════════════════════════════════════════════════
 
 function getVoice() {
@@ -977,97 +983,104 @@ function getVoice() {
   return voices.find(v => v.name === name) || null;
 }
 
-// Voice mode: 'mms' | 'browser'
-let voiceMode = 'mms';
+// Voice mode: 'piper' | 'browser'
+let voiceMode = 'piper';
 
-// MMS pipeline instances keyed by lang code ('eng' | 'dan')
-const mmsPipelines = {};
-let mmsLoadPromise = null;   // tracks the in-flight load
-let audioCtx = null;
-let currentAudioSource = null;  // so we can stop mid-playback
+// Track which Piper voice IDs have been downloaded this session
+const piperReady = {};   // lang → true once downloaded
+let currentAudio = null; // HTMLAudioElement so we can stop it
 
-// Map our lang-select codes → MMS model IDs on HuggingFace
-const MMS_MODELS = {
-  'en-US': 'Xenova/mms-tts-eng',
-  'da-DK': 'Xenova/mms-tts-dan',
+// Map our lang-select codes → Piper voice IDs in rhasspy/piper-voices
+const PIPER_VOICES = {
+  'en-US': 'en_US-hfc_male-medium',
+  'da-DK': 'da_DK-talesyntese-medium',
 };
 
 function setVoiceMode(mode) {
   voiceMode = mode;
-  document.getElementById('vmode-mms').classList.toggle('active', mode === 'mms');
+  document.getElementById('vmode-mms').classList.toggle('active', mode === 'piper');
   document.getElementById('vmode-browser').classList.toggle('active', mode === 'browser');
   const statusEl = document.getElementById('mms-status');
   if (mode === 'browser') {
     statusEl.textContent = 'Using system TTS.';
     statusEl.className = '';
   } else {
-    const modelId = MMS_MODELS[selectedLang] || MMS_MODELS['en-US'];
-    const key = selectedLang;
-    if (mmsPipelines[key]) {
-      statusEl.textContent = '✓ MMS model ready.';
+    if (piperReady[selectedLang]) {
+      statusEl.textContent = '✓ Piper voice ready.';
       statusEl.className = 'ok';
     } else {
-      statusEl.textContent = 'MMS not loaded yet — will download on first rehearsal start.';
+      statusEl.textContent = 'Piper voice not downloaded yet — will download on first use.';
       statusEl.className = '';
     }
   }
 }
 
-// Load (or return cached) MMS pipeline for the current language.
-// Shows the progress bar in the rehearsal screen while downloading.
-async function loadMmsPipeline(lang) {
-  if (mmsPipelines[lang]) return mmsPipelines[lang];
+// Wait for the vits-web ESM module to be available
+function waitForPiper() {
+  if (window._piperTts) return Promise.resolve(window._piperTts);
+  return new Promise(res => window.addEventListener('piper-ready', () => res(window._piperTts), { once: true }));
+}
 
-  const modelId = MMS_MODELS[lang] || MMS_MODELS['en-US'];
+// Download (once) and synthesise with Piper.
+// Returns an object-URL string on success, null on failure.
+async function piperSpeak(text, lang) {
+  const voiceId = PIPER_VOICES[lang] || PIPER_VOICES['en-US'];
   const loadBar = document.getElementById('mms-load-bar');
   const fillEl  = document.getElementById('mms-progress-fill');
   const labelEl = document.getElementById('mms-load-label');
 
-  loadBar.classList.add('active');
-  labelEl.textContent = `⏳ Downloading MMS voice (${modelId})…`;
-  fillEl.style.width = '5%';
-
   try {
-    // Wait for Transformers.js ESM module to be available
-    if (!window._transformersPipeline) {
-      await new Promise(res => window.addEventListener('transformers-ready', res, { once: true }));
-    }
+    const tts = await waitForPiper();
 
-    const pipe = await window._transformersPipeline('text-to-speech', modelId, {
-      progress_callback: (p) => {
-        if (p.status === 'downloading' && p.total) {
-          const pct = Math.round((p.loaded / p.total) * 90) + 5;
+    // Download model if not yet cached
+    if (!piperReady[lang]) {
+      loadBar.classList.add('active');
+      fillEl.style.width = '3%';
+      fillEl.style.background = '';
+      labelEl.textContent = `⏳ Downloading Piper voice (${voiceId})…`;
+
+      await tts.download(voiceId, (p) => {
+        if (p.total) {
+          const pct = Math.min(97, Math.round((p.loaded / p.total) * 97));
           fillEl.style.width = pct + '%';
           const mb = (p.total / 1024 / 1024).toFixed(0);
-          labelEl.textContent = `⏳ Downloading MMS voice… ${pct - 5}% (${mb} MB)`;
+          labelEl.textContent = `⏳ Downloading Piper voice… ${pct}% (${mb} MB total)`;
         }
-      },
-    });
+      });
 
-    mmsPipelines[lang] = pipe;
-    fillEl.style.width = '100%';
-    labelEl.textContent = '✓ MMS voice ready!';
-    setTimeout(() => loadBar.classList.remove('active'), 1200);
+      piperReady[lang] = true;
+      fillEl.style.width = '100%';
+      labelEl.textContent = '✓ Piper voice ready!';
+      setTimeout(() => loadBar.classList.remove('active'), 1200);
 
-    const statusEl = document.getElementById('mms-status');
-    statusEl.textContent = '✓ MMS model loaded and cached.';
-    statusEl.className = 'ok';
+      const statusEl = document.getElementById('mms-status');
+      statusEl.textContent = '✓ Piper voice downloaded and cached.';
+      statusEl.className = 'ok';
+    }
 
-    return pipe;
+    // Synthesise
+    const blob = await tts.predict({ text, voiceId });
+    return URL.createObjectURL(blob);
+
   } catch (err) {
-    console.warn('MMS load failed:', err);
-    fillEl.style.width = '100%';
-    fillEl.style.background = 'var(--danger)';
-    labelEl.textContent = '⚠️ MMS failed — using system TTS instead.';
-    setTimeout(() => {
-      loadBar.classList.remove('active');
-      fillEl.style.background = '';
-    }, 2500);
+    console.warn('Piper TTS error:', err);
+
+    // Show failure in the progress bar if it was open
+    if (loadBar.classList.contains('active')) {
+      fillEl.style.width = '100%';
+      fillEl.style.background = 'var(--danger)';
+      labelEl.textContent = '⚠️ Piper failed — using system TTS.';
+      setTimeout(() => {
+        loadBar.classList.remove('active');
+        fillEl.style.background = '';
+      }, 2500);
+    }
 
     const statusEl = document.getElementById('mms-status');
-    statusEl.textContent = '⚠️ MMS unavailable — falling back to system TTS.';
+    statusEl.textContent = '⚠️ Piper unavailable — falling back to system TTS.';
     statusEl.className = 'err';
 
+    // Auto-switch to browser TTS
     voiceMode = 'browser';
     document.getElementById('vmode-mms').classList.remove('active');
     document.getElementById('vmode-browser').classList.add('active');
@@ -1076,54 +1089,43 @@ async function loadMmsPipeline(lang) {
   }
 }
 
-// Play Float32 PCM audio through WebAudio
-function playPcmAudio(audioData, sampleRate, onDone) {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  // Stop anything currently playing
-  if (currentAudioSource) { try { currentAudioSource.stop(); } catch(e){} }
-
-  const buffer = audioCtx.createBuffer(1, audioData.length, sampleRate);
-  buffer.copyToChannel(audioData, 0);
-  const source = audioCtx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(audioCtx.destination);
-  source.onended = () => { currentAudioSource = null; onDone(); };
-  source.start();
-  currentAudioSource = source;
-}
-
-function stopMmsAudio() {
-  if (currentAudioSource) {
-    try { currentAudioSource.stop(); } catch(e) {}
-    currentAudioSource = null;
+function stopPiperAudio() {
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio.src = '';
+    currentAudio = null;
   }
 }
 
-// Main speak function — tries MMS, falls back to browser TTS
+// Main speak function — tries Piper, falls back to browser TTS
 async function speakLines(text, onDone) {
-  // Always cancel any in-progress speech
   synth.cancel();
   clearStallGuard();
-  stopMmsAudio();
+  stopPiperAudio();
 
-  if (voiceMode === 'mms') {
-    try {
-      const pipe = await loadMmsPipeline(selectedLang);
-      if (pipe && appState === 'reading') {
-        const result = await pipe(text);
-        if (appState !== 'reading') return;  // state changed while generating
-        playPcmAudio(result.audio, result.sampling_rate, () => {
-          if (appState === 'reading') onDone();
-        });
-        return;
-      }
-    } catch(err) {
-      console.warn('MMS inference error:', err);
-      // fall through to browser TTS
+  if (voiceMode === 'piper') {
+    const url = await piperSpeak(text, selectedLang);
+    if (url && appState === 'reading') {
+      const audio = new Audio(url);
+      currentAudio = audio;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        currentAudio = null;
+        if (appState === 'reading') onDone();
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        currentAudio = null;
+        if (appState === 'reading') onDone();
+      };
+      audio.play().catch(() => {
+        if (appState === 'reading') onDone();
+      });
+      return;
     }
+    // url was null → already fell back to browser mode above, fall through
   }
 
-  // Browser TTS fallback
   speakLinesBrowser(text, onDone);
 }
 
@@ -1304,7 +1306,7 @@ function getFirstWord(text) {
 
 function speakHint(text) {
   synth.cancel();
-  stopMmsAudio();
+  stopPiperAudio();
   const utt = new SpeechSynthesisUtterance(text);
   utt.lang = selectedLang;
   const v = getVoice();
@@ -1440,7 +1442,7 @@ document.getElementById('pause-btn').addEventListener('click', () => {
     // Pause — shut down recognition so mic light turns off
     isPaused = true;
     synth.cancel();
-    stopMmsAudio();
+    stopPiperAudio();
     shutdownRecognition();
     setState('paused');
   }
@@ -1451,7 +1453,7 @@ document.getElementById('skip-btn').addEventListener('click', () => {
     advanceCue();
   } else if (appState === 'reading') {
     synth.cancel();
-    stopMmsAudio();
+    stopPiperAudio();
     clearStallGuard();
     pauseRecognition();
     playCue(cueIndex + 1);
@@ -1481,7 +1483,7 @@ document.getElementById('restart-btn').addEventListener('click', () => {
 
 document.getElementById('back-btn').addEventListener('click', () => {
   synth.cancel();
-  stopMmsAudio();
+  stopPiperAudio();
   shutdownRecognition();
   setState('idle');
   isPaused = false;
