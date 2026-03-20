@@ -5,14 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>WhatsMyLine — Line Learner</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script type="module">
-    // Make pipeline available globally for the inline script below
-    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1/dist/transformers.min.js';
-    env.allowLocalModels = false;
-    window._transformersPipeline = pipeline;
-    window._transformersEnv = env;
-    window.dispatchEvent(new Event('transformers-ready'));
-  </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -262,62 +254,6 @@
       display: none;
     }
 
-    /* ── MMS LOAD PROGRESS ── */
-    #mms-load-bar {
-      display: none;
-      flex-direction: column;
-      gap: 0.4rem;
-      margin-bottom: 0.75rem;
-      background: var(--bg2);
-      border: 1px solid #2a2a6a;
-      border-radius: var(--radius);
-      padding: 0.75rem 1rem;
-    }
-    #mms-load-bar.active { display: flex; }
-    #mms-load-label { font-size: 0.82rem; color: var(--text-dim); }
-    #mms-progress-track {
-      width: 100%; height: 6px;
-      background: #2a2a4a;
-      border-radius: 3px;
-      overflow: hidden;
-    }
-    #mms-progress-fill {
-      height: 100%;
-      background: var(--teal);
-      border-radius: 3px;
-      width: 0%;
-      transition: width 0.2s;
-    }
-
-    /* ── VOICE MODE TOGGLE ── */
-    .voice-mode-row {
-      display: flex; gap: 0.5rem; margin-top: 0.6rem; flex-wrap: wrap;
-    }
-    .voice-mode-btn {
-      flex: 1; min-width: 120px;
-      padding: 0.4rem 0.7rem;
-      border: 1px solid #2a2a6a;
-      border-radius: 6px;
-      background: var(--bg3);
-      color: var(--text-dim);
-      font-size: 0.82rem;
-      cursor: pointer;
-      text-align: center;
-      transition: all 0.15s;
-    }
-    .voice-mode-btn.active {
-      border-color: var(--teal);
-      color: var(--teal);
-      background: rgba(0,180,216,0.1);
-    }
-    #mms-status {
-      font-size: 0.78rem;
-      color: var(--text-dim);
-      margin-top: 0.4rem;
-      min-height: 1.1em;
-    }
-    #mms-status.ok { color: var(--success); }
-    #mms-status.err { color: var(--danger); }
 
     /* Scrollbar */
     #script-view::-webkit-scrollbar { width: 6px; }
@@ -383,18 +319,12 @@
         </select>
       </div>
       <div class="form-group">
-        <label for="voice-select">Fallback voice (system TTS)</label>
+        <label for="voice-select">Voice (system TTS)</label>
         <select id="voice-select">
           <option value="">— loading voices… —</option>
         </select>
       </div>
     </div>
-    <label style="font-size:0.8rem;color:var(--text-dim);">Voice engine</label>
-    <div class="voice-mode-row">
-      <div class="voice-mode-btn active" id="vmode-mms" onclick="setVoiceMode('mms')">🤖 MMS (on-device AI)</div>
-      <div class="voice-mode-btn" id="vmode-browser" onclick="setVoiceMode('browser')">🔊 System TTS</div>
-    </div>
-    <div id="mms-status">MMS not loaded yet — will download on first rehearsal start.</div>
   </div>
 
   <div class="card">
@@ -435,11 +365,6 @@
     </div>
   </div>
 
-  <div id="mms-load-bar">
-    <div id="mms-load-label">⏳ Downloading MMS voice model…</div>
-    <div id="mms-progress-track"><div id="mms-progress-fill"></div></div>
-  </div>
-
   <div id="mic-panel">
     <div id="mic-circle">🎙</div>
     <div id="live-transcript"></div>
@@ -467,7 +392,7 @@ let silenceTimer     = null;
 let stallGuard       = null;
 let isPaused         = false;
 let hintVisible      = false;
-let recognition      = null;     // single persistent instance
+let recognition      = null;     // single persistent SpeechRecognition instance
 let sessionTranscript = '';      // accumulated spoken text for current user turn
 let voices           = [];
 let selectedLang     = 'en-US';
@@ -777,10 +702,22 @@ function parseScript(rawLines) {
   let buffer = [];
 
   function flush() {
-    if (currentChar && buffer.length > 0) {
-      cues.push({ character: currentChar, lines: buffer.join(' ') });
-    }
+    if (currentChar && buffer.length > 0) cues.push({ character: currentChar, lines: buffer.join(' ') });
     buffer = [];
+  }
+
+  // Handle "CHARACTER: dialogue" inline format. Returns true if matched.
+  function tryColonFormat(line) {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx <= 0 || colonIdx >= 36) return false;
+    const potentialChar = line.substring(0, colonIdx).trim();
+    if (!isCharacterName(potentialChar)) return false;
+    flush();
+    currentChar = stripParenthetical(potentialChar);
+    state = 'collecting';
+    const dialogue = line.substring(colonIdx + 1).trim();
+    if (dialogue) buffer.push(dialogue);
+    return true;
   }
 
   for (const rawItem of rawLines) {
@@ -819,32 +756,11 @@ function parseScript(rawLines) {
       // are never accidentally dropped.
       if (isItalic) continue;
 
-      // Support simple "CHARACTER: dialogue" format for TXT
-      const colonIdx = line.indexOf(':');
-      if (colonIdx > 0 && colonIdx < 36) {
-        const potentialChar = line.substring(0, colonIdx).trim();
-        if (isCharacterName(potentialChar)) {
-          flush();
-          currentChar = stripParenthetical(potentialChar);
-          const dialogue = line.substring(colonIdx + 1).trim();
-          if (dialogue) buffer.push(dialogue);
-          continue;
-        }
-      }
+      if (tryColonFormat(line)) continue;
       buffer.push(line);
     } else {
       // seeking — also try colon format
-      const colonIdx = line.indexOf(':');
-      if (colonIdx > 0 && colonIdx < 36) {
-        const potentialChar = line.substring(0, colonIdx).trim();
-        if (isCharacterName(potentialChar)) {
-          flush();
-          currentChar = stripParenthetical(potentialChar);
-          state = 'collecting';
-          const dialogue = line.substring(colonIdx + 1).trim();
-          if (dialogue) buffer.push(dialogue);
-        }
-      }
+      tryColonFormat(line);
     }
   }
   flush();
@@ -968,7 +884,7 @@ function setState(state) {
 }
 
 // ════════════════════════════════════════════════════════
-//  TTS — MMS on-device (Transformers.js) with browser fallback
+//  TTS — system speech synthesis
 // ════════════════════════════════════════════════════════
 
 function getVoice() {
@@ -977,167 +893,21 @@ function getVoice() {
   return voices.find(v => v.name === name) || null;
 }
 
-// Voice mode: 'mms' | 'browser'
-let voiceMode = 'mms';
-
-// MMS pipeline instances keyed by lang code ('eng' | 'dan')
-const mmsPipelines = {};
-let mmsLoadPromise = null;   // tracks the in-flight load
-let audioCtx = null;
-let currentAudioSource = null;  // so we can stop mid-playback
-
-// Map our lang-select codes → MMS model IDs on HuggingFace
-const MMS_MODELS = {
-  'en-US': 'Xenova/mms-tts-eng',
-  'da-DK': 'Xenova/mms-tts-dan',
-};
-
-function setVoiceMode(mode) {
-  voiceMode = mode;
-  document.getElementById('vmode-mms').classList.toggle('active', mode === 'mms');
-  document.getElementById('vmode-browser').classList.toggle('active', mode === 'browser');
-  const statusEl = document.getElementById('mms-status');
-  if (mode === 'browser') {
-    statusEl.textContent = 'Using system TTS.';
-    statusEl.className = '';
-  } else {
-    const modelId = MMS_MODELS[selectedLang] || MMS_MODELS['en-US'];
-    const key = selectedLang;
-    if (mmsPipelines[key]) {
-      statusEl.textContent = '✓ MMS model ready.';
-      statusEl.className = 'ok';
-    } else {
-      statusEl.textContent = 'MMS not loaded yet — will download on first rehearsal start.';
-      statusEl.className = '';
-    }
-  }
-}
-
-// Load (or return cached) MMS pipeline for the current language.
-// Shows the progress bar in the rehearsal screen while downloading.
-async function loadMmsPipeline(lang) {
-  if (mmsPipelines[lang]) return mmsPipelines[lang];
-
-  const modelId = MMS_MODELS[lang] || MMS_MODELS['en-US'];
-  const loadBar = document.getElementById('mms-load-bar');
-  const fillEl  = document.getElementById('mms-progress-fill');
-  const labelEl = document.getElementById('mms-load-label');
-
-  loadBar.classList.add('active');
-  labelEl.textContent = `⏳ Downloading MMS voice (${modelId})…`;
-  fillEl.style.width = '5%';
-
-  try {
-    // Wait for Transformers.js ESM module to be available
-    if (!window._transformersPipeline) {
-      await new Promise(res => window.addEventListener('transformers-ready', res, { once: true }));
-    }
-
-    const pipe = await window._transformersPipeline('text-to-speech', modelId, {
-      progress_callback: (p) => {
-        if (p.status === 'downloading' && p.total) {
-          const pct = Math.round((p.loaded / p.total) * 90) + 5;
-          fillEl.style.width = pct + '%';
-          const mb = (p.total / 1024 / 1024).toFixed(0);
-          labelEl.textContent = `⏳ Downloading MMS voice… ${pct - 5}% (${mb} MB)`;
-        }
-      },
-    });
-
-    mmsPipelines[lang] = pipe;
-    fillEl.style.width = '100%';
-    labelEl.textContent = '✓ MMS voice ready!';
-    setTimeout(() => loadBar.classList.remove('active'), 1200);
-
-    const statusEl = document.getElementById('mms-status');
-    statusEl.textContent = '✓ MMS model loaded and cached.';
-    statusEl.className = 'ok';
-
-    return pipe;
-  } catch (err) {
-    console.warn('MMS load failed:', err);
-    fillEl.style.width = '100%';
-    fillEl.style.background = 'var(--danger)';
-    labelEl.textContent = '⚠️ MMS failed — using system TTS instead.';
-    setTimeout(() => {
-      loadBar.classList.remove('active');
-      fillEl.style.background = '';
-    }, 2500);
-
-    const statusEl = document.getElementById('mms-status');
-    statusEl.textContent = '⚠️ MMS unavailable — falling back to system TTS.';
-    statusEl.className = 'err';
-
-    voiceMode = 'browser';
-    document.getElementById('vmode-mms').classList.remove('active');
-    document.getElementById('vmode-browser').classList.add('active');
-
-    return null;
-  }
-}
-
-// Play Float32 PCM audio through WebAudio
-function playPcmAudio(audioData, sampleRate, onDone) {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  // Stop anything currently playing
-  if (currentAudioSource) { try { currentAudioSource.stop(); } catch(e){} }
-
-  const buffer = audioCtx.createBuffer(1, audioData.length, sampleRate);
-  buffer.copyToChannel(audioData, 0);
-  const source = audioCtx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(audioCtx.destination);
-  source.onended = () => { currentAudioSource = null; onDone(); };
-  source.start();
-  currentAudioSource = source;
-}
-
-function stopMmsAudio() {
-  if (currentAudioSource) {
-    try { currentAudioSource.stop(); } catch(e) {}
-    currentAudioSource = null;
-  }
-}
-
-// Main speak function — tries MMS, falls back to browser TTS
-async function speakLines(text, onDone) {
-  // Always cancel any in-progress speech
-  synth.cancel();
-  clearStallGuard();
-  stopMmsAudio();
-
-  if (voiceMode === 'mms') {
-    try {
-      const pipe = await loadMmsPipeline(selectedLang);
-      if (pipe && appState === 'reading') {
-        const result = await pipe(text);
-        if (appState !== 'reading') return;  // state changed while generating
-        playPcmAudio(result.audio, result.sampling_rate, () => {
-          if (appState === 'reading') onDone();
-        });
-        return;
-      }
-    } catch(err) {
-      console.warn('MMS inference error:', err);
-      // fall through to browser TTS
-    }
-  }
-
-  // Browser TTS fallback
-  speakLinesBrowser(text, onDone);
-}
-
-function speakLinesBrowser(text, onDone) {
+function makeUtterance(text) {
   const utt = new SpeechSynthesisUtterance(text);
   utt.lang = selectedLang;
   const v = getVoice();
   if (v) utt.voice = v;
-  utt.rate = 1.0;
+  return utt;
+}
 
-  utt.onend = () => {
-    clearStallGuard();
-    if (appState === 'reading') onDone();
-  };
+function speakLines(text, onDone) {
+  synth.cancel();
+  clearStallGuard();
+
+  const utt = makeUtterance(text);
+  utt.rate = 1.0;
+  utt.onend = () => { clearStallGuard(); if (appState === 'reading') onDone(); };
   utt.onerror = (e) => {
     if (e.error === 'interrupted' || e.error === 'canceled') return;
     console.warn('TTS error:', e.error);
@@ -1145,9 +915,14 @@ function speakLinesBrowser(text, onDone) {
     if (appState === 'reading') onDone();
   };
 
-  synth.speak(utt);
+  try {
+    synth.speak(utt);
+  } catch(e) {
+    clearStallGuard();
+    if (appState === 'reading') onDone();
+    return;
+  }
 
-  // Stall guard — scale timeout with text length
   const guardMs = Math.max(10000, text.length * 80);
   stallGuard = setTimeout(() => {
     if (appState === 'reading' && !synth.speaking && !synth.pending) {
@@ -1162,7 +937,7 @@ function clearStallGuard() {
 }
 
 // ════════════════════════════════════════════════════════
-//  PERSISTENT SPEECH RECOGNITION
+//  STT — persistent Web Speech API
 //  Created once on Start; kept alive between cues so the
 //  browser never re-prompts for mic permission.
 // ════════════════════════════════════════════════════════
@@ -1199,7 +974,7 @@ function initRecognition() {
       const firstWord = getFirstWord(cueList[cueIndex]?.lines || '');
       if (firstWord) {
         clearSilenceTimers();
-        sessionTranscript = '';   // reset so user can try again after hint
+        sessionTranscript = '';
         speakHint(firstWord);
         return;
       }
@@ -1208,7 +983,6 @@ function initRecognition() {
     // ── Accuracy + silence logic ──
     if (finalText) {
       if (accuracyThreshold === 0) {
-        // Any speech is fine — set silence timer
         silenceTimer = setTimeout(() => advanceCue(), silenceDelay);
       } else {
         const score = lineAccuracy(sessionTranscript, cueList[cueIndex]?.lines || '');
@@ -1220,7 +994,6 @@ function initRecognition() {
         } else {
           document.getElementById('live-transcript').textContent =
             displayText + ` · ${pct}% — need ${accuracyThreshold}%`;
-          // Clear transcript after 2s so the user can try again from scratch
           silenceTimer = setTimeout(() => {
             sessionTranscript = '';
             document.getElementById('live-transcript').textContent = '… try again …';
@@ -1228,14 +1001,12 @@ function initRecognition() {
         }
       }
     } else if (accuracyThreshold === 0) {
-      // Interim only — set a longer fallback timer (skip when accuracy mode is on)
       silenceTimer = setTimeout(() => advanceCue(), Math.max(silenceDelay, 2500));
     }
   };
 
   recognition.onspeechend = () => {
     if (appState !== 'listening') return;
-    // Only auto-advance on speech-end when accuracy check is off
     if (accuracyThreshold === 0) {
       clearSilenceTimers();
       silenceTimer = setTimeout(() => advanceCue(), 800);
@@ -1248,14 +1019,13 @@ function initRecognition() {
       setState('paused');
       isPaused = true;
     } else if (e.error === 'no-speech' || e.error === 'aborted') {
-      // ignore — handled by absolute timer / intentional stop
+      // ignore
     } else {
       console.warn('STT error:', e.error);
     }
   };
 
   recognition.onend = () => {
-    // Keep mic alive — auto-restart unless we deliberately shut down
     if (appState !== 'idle' && appState !== 'done' && !isPaused && recognition) {
       try { recognition.start(); } catch(err) {}
     }
@@ -1270,27 +1040,23 @@ function initRecognition() {
   }
 }
 
-// Called each time it's the user's turn — recognition is already running
 function startListening() {
   sessionTranscript = '';
   document.getElementById('live-transcript').textContent = '… listening …';
-  // No absolute timeout — wait indefinitely until the user speaks
 }
 
 function clearSilenceTimers() {
   if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
 }
 
-// Between cues (reading state): just clear timers — recognition keeps running
 function pauseRecognition() {
   clearSilenceTimers();
 }
 
-// Full shutdown: back-to-setup, session done
 function shutdownRecognition() {
   clearSilenceTimers();
   if (recognition) {
-    recognition.onend = null;   // prevent auto-restart
+    recognition.onend = null;
     try { recognition.stop(); } catch(e) {}
     recognition = null;
   }
@@ -1304,11 +1070,7 @@ function getFirstWord(text) {
 
 function speakHint(text) {
   synth.cancel();
-  stopMmsAudio();
-  const utt = new SpeechSynthesisUtterance(text);
-  utt.lang = selectedLang;
-  const v = getVoice();
-  if (v) utt.voice = v;
+  const utt = makeUtterance(text);
   utt.onend = () => {
     if (appState === 'listening') {
       document.getElementById('live-transcript').textContent = '… listening …';
@@ -1320,16 +1082,15 @@ function speakHint(text) {
 // Word-overlap accuracy: what fraction of the expected words appear in spoken
 function lineAccuracy(spoken, expected) {
   if (!expected) return 0;
-  // Strip punctuation/symbols but keep all Unicode letters (æøå, accented chars, etc.)
   const norm = s => s.toLowerCase().replace(/[^\p{L}\s]/gu, '').split(/\s+/).filter(Boolean);
-  const spokenWords   = norm(spoken);
   const expectedWords = norm(expected);
   if (expectedWords.length === 0) return 1;
-  const pool = [...spokenWords];
+  const freq = new Map();
+  for (const w of norm(spoken)) freq.set(w, (freq.get(w) || 0) + 1);
   let matched = 0;
   for (const w of expectedWords) {
-    const idx = pool.indexOf(w);
-    if (idx !== -1) { matched++; pool.splice(idx, 1); }
+    const n = freq.get(w) || 0;
+    if (n > 0) { matched++; freq.set(w, n - 1); }
   }
   return matched / expectedWords.length;
 }
@@ -1371,42 +1132,20 @@ document.getElementById('start-btn').addEventListener('click', async () => {
   selectedLang = document.getElementById('lang-select').value;
   if (!myCharacter || cueList.length === 0) return;
 
-  // ── Mic permission pre-warm ──────────────────────────────────────────────
-  // Strategy 1: standard getUserMedia (works on HTTPS on all platforms)
-  // Strategy 2: legacy getUserMedia shim (older Android WebView / Chrome)
-  // Strategy 3: if neither is available (file://, non-HTTPS) warn the user
-  //             that speech recognition requires a secure context (HTTPS).
-
   const isSecure = location.protocol === 'https:' || location.hostname === 'localhost';
-
   if (!isSecure) {
-    // Non-secure context — SpeechRecognition AND getUserMedia both require HTTPS
-    // on Android Chrome. Show a clear, actionable error instead of silently failing.
     showToast('⚠️ Microphone requires HTTPS. Please serve this page over https:// and try again.', 6000);
     return;
   }
 
-  // Normalise getUserMedia across browsers / older Android
-  const gum = (
-    navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices)
-    || (cb => new Promise((res, rej) => {
-        const legacy = navigator.getUserMedia || navigator.webkitGetUserMedia
-                     || navigator.mozGetUserMedia || navigator.msGetUserMedia;
-        if (legacy) legacy.call(navigator, cb, res, rej);
-        else rej(new DOMException('getUserMedia not supported', 'NotSupportedError'));
-      }))
-  );
-
   try {
-    const stream = await gum({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach(t => t.stop());
   } catch(e) {
     if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
       showToast('🎙 Microphone access denied. Please allow mic access and try again.');
       return;
     }
-    // NotSupportedError / TypeError / other — fall through and let
-    // SpeechRecognition make its own permission request.
   }
 
   document.getElementById('setup-screen').style.display = 'none';
@@ -1417,7 +1156,6 @@ document.getElementById('start-btn').addEventListener('click', async () => {
   hintVisible = false;
   setState('idle');
 
-  // Init the persistent recognition instance (asks permission once above)
   initRecognition();
 
   const startIndex = parseInt(document.getElementById('scene-select').value, 10) || 0;
@@ -1426,9 +1164,7 @@ document.getElementById('start-btn').addEventListener('click', async () => {
 
 document.getElementById('pause-btn').addEventListener('click', () => {
   if (appState === 'paused') {
-    // Resume
     isPaused = false;
-    // Re-init recognition (it was shut down on pause)
     if (!recognition) initRecognition();
     if (cueList[cueIndex] && cueList[cueIndex].character === myCharacter) {
       setState('listening');
@@ -1437,10 +1173,8 @@ document.getElementById('pause-btn').addEventListener('click', () => {
       playCue(cueIndex);
     }
   } else {
-    // Pause — shut down recognition so mic light turns off
     isPaused = true;
     synth.cancel();
-    stopMmsAudio();
     shutdownRecognition();
     setState('paused');
   }
@@ -1451,7 +1185,6 @@ document.getElementById('skip-btn').addEventListener('click', () => {
     advanceCue();
   } else if (appState === 'reading') {
     synth.cancel();
-    stopMmsAudio();
     clearStallGuard();
     pauseRecognition();
     playCue(cueIndex + 1);
@@ -1481,7 +1214,6 @@ document.getElementById('restart-btn').addEventListener('click', () => {
 
 document.getElementById('back-btn').addEventListener('click', () => {
   synth.cancel();
-  stopMmsAudio();
   shutdownRecognition();
   setState('idle');
   isPaused = false;
